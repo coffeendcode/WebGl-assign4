@@ -1,0 +1,739 @@
+<html>
+
+<head>
+<title>Lighting Assign</title>
+<meta http-equiv='content-type' content='text/html; charset=ISO-8859-1'>
+
+<!-- CSS Styles //-->
+<link href='Common/css/style.css' 		type='text/css' rel='stylesheet'>
+<link href='Common/css/desert.css' 	type='text/css' rel='stylesheet'/>
+<link href='Common/css/colorpicker.css' 	type='text/css' rel='stylesheet'/>
+<link href='Common/css/smoothness/jquery-ui.min.css' type='text/css' rel='stylesheet' />
+
+<!-- JavaScript Libraries //-->
+<script type='text/javascript' src='Common/js/gl-matrix-min.js'></script>
+<script type='text/javascript' src='Common/js/jquery-2.2.1.min.js'></script>
+<script type='text/javascript' src='Common/js/jquery-ui.min.js'></script>
+<script type='text/javascript' src='Common/js/prettify.js'></script>
+<script type='text/javascript' src='Common/js/utils.js'></script>
+<script type='text/javascript' src='Common/js/colorpicker.js'></script>
+<script type='text/javascript' src='Common/js/codeview.js'></script>
+
+
+<script id="vertex-shader" type="x-shader/x-vertex">
+attribute vec3 aVertexPosition;
+attribute vec3 aVertexNormal;
+
+uniform mat4 uMVMatrix;
+uniform mat4 uPMatrix;
+uniform mat4 uNMatrix;
+
+uniform float uShininess;		 //shininness
+uniform vec3 uLightDirection;	 //light direction
+
+uniform vec4 uLightAmbient;      //light ambient property
+uniform vec4 uLightDiffuse;      //light diffuse property
+uniform vec4 uLightSpecular;     //light specular property
+
+uniform vec4 uMaterialAmbient;	 //object ambient property
+uniform vec4 uMaterialDiffuse;   //object diffuse property
+uniform vec4 uMaterialSpecular;  //object specular property
+
+varying vec4 vFinalColor;
+
+void main(void) {
+
+	//Transformed vertex position
+	vec4 vertex = uMVMatrix * vec4(aVertexPosition, 1.0);
+
+	//Transformed normal position
+    vec3 N = vec3(uNMatrix * vec4(aVertexNormal, 1.0));
+
+	//Invert and normalize light to calculate lambertTerm
+    vec3 L = normalize(uLightDirection);
+
+	//Lambert's cosine law
+	float lambertTerm = clamp(dot(N,-L),0.0,1.0);
+
+	//Ambient Term
+    vec4 Ia = uLightAmbient * uMaterialAmbient;
+
+	//Diffuse Term
+	vec4 Id = vec4(0.0,0.0,0.0,1.0);
+
+	//Specular Term
+	vec4 Is = vec4(0.0,0.0,0.0,1.0);
+
+
+    Id = uLightDiffuse* uMaterialDiffuse * lambertTerm; //add diffuse term
+
+    vec3 eyeVec = -vec3(vertex.xyz);
+    vec3 E = normalize(eyeVec);
+    vec3 R = reflect(L, N);
+    float specular = pow(max(dot(R, E), 0.0), uShininess );
+
+    Is = uLightSpecular * uMaterialSpecular * specular;	//add specular term
+
+
+	//Final color
+	vFinalColor = Ia + Id + Is;
+	vFinalColor.a = 1.0;
+
+	//Transformed vertex position
+	gl_Position = uPMatrix * vertex;
+}
+</script>
+
+<script id="fragment-shader" type="x-shader/x-fragment">
+#ifdef GL_ES
+precision highp float;
+#endif
+
+varying vec4 vFinalColor;
+
+void main(void)
+{
+	gl_FragColor = vFinalColor;
+  //gl_FragColor = vec4(0.5,0.5,0.5,1.0);
+}
+</script>
+
+
+<script id='code-js' type="text/javascript">
+
+var gl = null; // WebGL context
+var prg = null; // The program (shaders)
+var c_width = 0; // Variable to store the width of the canvas
+var c_height = 0; // Variable to store the height of the canvas
+var clearColor = [0.3,0.3,0.3,1.0];
+
+var mvMatrix = mat4.create(); // The Model-View matrix
+var pMatrix = mat4.create(); // The projection matrix
+
+/*-----------------------------------------------------*/
+var nMatrix =  mat4.create();      // The normal matrix
+/*-----------------------------------------------------*/
+
+var sphereVerticesBuffer;
+var sphereIndicesBuffer;
+
+/*-----------------------------------------------------*/
+var sphereNormalsBuffer;              //VBO for Normals
+/*-----------------------------------------------------*/
+
+
+var vertices;
+var indices;
+/*-----------------------------------------------------*/
+var normals;              //JavaScript Array for Normals
+/*-----------------------------------------------------*/
+
+var cubeVertexIndexBuffer;
+
+var cubeVertexPositionBuffer;
+
+var angle = 0;
+
+/**
+* The program contains a series of instructions that tell the Graphic Processing Unit (GPU)
+* what to do with every vertex and fragment that we pass it.
+* The vertex shader and the fragment shader together are called the program.
+*/
+function initProgram() {
+	var fragmentShader = utils.getShader(gl, "fragment-shader");
+  var vertexShader = utils.getShader(gl, "vertex-shader");
+	prg = gl.createProgram();
+	gl.attachShader(prg, vertexShader);
+	gl.attachShader(prg, fragmentShader);
+	gl.linkProgram(prg);
+
+	if (!gl.getProgramParameter(prg, gl.LINK_STATUS)) {
+		alert("Could not initialize shaders");
+	}
+
+	gl.useProgram(prg);
+
+	prg.aVertexPosition    = gl.getAttribLocation(prg, "aVertexPosition");
+	prg.aVertexNormal      = gl.getAttribLocation(prg, "aVertexNormal");
+
+	prg.uPMatrix   		   = gl.getUniformLocation(prg, "uPMatrix");
+	prg.uMVMatrix  	       = gl.getUniformLocation(prg, "uMVMatrix");
+	prg.uNMatrix           = gl.getUniformLocation(prg, "uNMatrix");
+
+	prg.uMaterialAmbient	= gl.getUniformLocation(prg, "uMaterialAmbient");
+	prg.uMaterialDiffuse    = gl.getUniformLocation(prg, "uMaterialDiffuse");
+	prg.uMaterialSpecular	= gl.getUniformLocation(prg, "uMaterialSpecular");
+
+	prg.uShininess         	= gl.getUniformLocation(prg, "uShininess");
+
+	prg.uLightAmbient     	= gl.getUniformLocation(prg, "uLightAmbient");
+	prg.uLightDiffuse       = gl.getUniformLocation(prg, "uLightDiffuse");
+	prg.uLightSpecular		= gl.getUniformLocation(prg, "uLightSpecular");
+
+	prg.uLightDirection    	= gl.getUniformLocation(prg, "uLightDirection");
+
+}
+
+
+function initLights(){
+	gl.uniform3fv(prg.uLightDirection, [-0.25, -0.25, -0.25]);
+	gl.uniform4fv(prg.uLightAmbient,[0.03,0.03,0.03,1.0]);
+	gl.uniform4fv(prg.uLightDiffuse, [1.0,1.0,1.0,1.0]);
+	gl.uniform4fv(prg.uLightSpecular, [1.0,1.0,1.0,1.0]);
+
+	gl.uniform4fv(prg.uMaterialAmbient, [1.0,1.0,1.0,1.0]);
+	gl.uniform4fv(prg.uMaterialDiffuse, [46/256,99/256,191/256,1.0]);
+	gl.uniform4fv(prg.uMaterialSpecular, [1.0,1.0,1.0,1.0]);
+    gl.uniform1f(prg.uShininess, 10.0);
+}
+
+/**
+* This function generates SPHERE data and creates the buffers
+*/
+function initBuffers()
+{
+
+	cubeVertexPositionBuffer = gl.createBuffer();
+
+	gl.bindBuffer(gl.ARRAY_BUFFER, cubeVertexPositionBuffer);
+
+
+	vertices = [1.0,  1.0,  1.0, //v0
+
+      -1.0,  1.0,  1.0, //v1
+
+      -1.0, -1.0,  1.0, //v2
+
+       1.0, -1.0,  1.0, //v3
+
+
+
+       // Back face
+
+       1.0,  1.0, -1.0, //v4
+
+      -1.0,  1.0, -1.0, //v5
+
+      -1.0, -1.0, -1.0, //v6
+
+       1.0, -1.0, -1.0, //v7
+
+
+
+       // Left face
+
+      -1.0,  1.0,  1.0, //v8
+
+      -1.0,  1.0, -1.0, //v9
+
+      -1.0, -1.0, -1.0, //v10
+
+      -1.0, -1.0,  1.0, //v11
+
+
+
+       // Right face
+
+       1.0,  1.0,  1.0, //12
+
+       1.0, -1.0,  1.0, //13
+
+       1.0, -1.0, -1.0, //14
+
+       1.0,  1.0, -1.0, //15
+
+
+
+        // Top face
+
+        1.0,  1.0,  1.0, //v16
+
+        1.0,  1.0, -1.0, //v17
+
+       -1.0,  1.0, -1.0, //v18
+
+       -1.0,  1.0,  1.0, //v19
+
+
+
+        // Bottom face
+
+        1.0, -1.0,  1.0, //v20
+
+        1.0, -1.0, -1.0, //v21
+
+       -1.0, -1.0, -1.0, //v22
+
+       -1.0, -1.0,  1.0, //v23
+	   ];
+	   
+	   cubeVertexPositionBuffer.itemSize = 3;
+
+		cubeVertexPositionBuffer.numberOfItems = 24;
+	   
+	   cubeVertexIndexBuffer = gl.createBuffer();
+	   
+	indices = [0, 1, 2,      0, 2, 3,    // Front face
+
+            4, 6, 5,      4, 7, 6,    // Back face
+
+            8, 9, 10,     8, 10, 11,  // Left face
+
+            12, 13, 14,   12, 14, 15, // Right face
+
+            16, 17, 18,   16, 18, 19, // Top face
+
+            20, 22, 21,   20, 23, 22  // Bottom face
+			];
+	normals = utils.calculateNormals(vertices, indices);
+	
+	cubeVertexIndexBuffer.itemSize = 1;
+	
+	cubeVertexIndexBuffer.numberOfItems = 36;
+
+	sphereVerticesBuffer = gl.createBuffer();
+	gl.bindBuffer(gl.ARRAY_BUFFER, sphereVerticesBuffer);
+	gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+
+	sphereNormalsBuffer = gl.createBuffer();
+	gl.bindBuffer(gl.ARRAY_BUFFER, sphereNormalsBuffer);
+	gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normals), gl.STATIC_DRAW);
+
+	sphereIndicesBuffer = gl.createBuffer();
+	gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, sphereIndicesBuffer);
+	gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+
+	gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+
+
+}
+
+
+function drawCube(){
+
+  gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT,0);
+}
+
+/**
+* Main rendering function. Called every 500ms according to WebGLStart function (see below)
+*/
+function drawScene() {
+    gl.clearColor(clearColor[0],clearColor[1],clearColor[2],clearColor[3]);
+    gl.clearDepth(100.0);
+	gl.enable(gl.DEPTH_TEST);
+	gl.depthFunc(gl.LEQUAL);
+	gl.viewport(0, 0, c_width, c_height);
+	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+	mat4.perspective(45, c_width / c_height, 0.1, 10000.0, pMatrix);
+
+    mat4.identity(mvMatrix);
+    mat4.translate(mvMatrix, [0.0, 0.0, -3]); //Sets the camera to a reasonable distance to view the part
+    mat4.rotate(mvMatrix, angle * Math.PI / 180, [0, 1, 0]);
+
+    gl.uniformMatrix4fv(prg.uMVMatrix, false, mvMatrix);
+	gl.uniformMatrix4fv(prg.uPMatrix, false, pMatrix);
+
+    mat4.set(mvMatrix, nMatrix);
+    mat4.inverse(nMatrix);
+    mat4.transpose(nMatrix);
+
+    gl.uniformMatrix4fv(prg.uNMatrix, false, nMatrix);
+	
+		/// Drawing!!!!!!!
+
+    	gl.enableVertexAttribArray(prg.aVertexPosition);
+		gl.enableVertexAttribArray(prg.aVertexNormal);
+
+		
+		gl.bindBuffer(gl.ARRAY_BUFFER, sphereVerticesBuffer);
+		gl.vertexAttribPointer(prg.aVertexPosition, 3, gl.FLOAT, false, 0, 0);
+
+		gl.bindBuffer(gl.ARRAY_BUFFER, sphereNormalsBuffer);
+		gl.vertexAttribPointer(prg.aVertexNormal,3,gl.FLOAT, false, 0,0);
+		
+		// Table Top <============
+		mat4.translate(mvMatrix, [0,-0.3, 0], mvMatrix);
+		mat4.scale(mvMatrix, [0.7,0.1,0.7], mvMatrix);
+		
+
+	    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,sphereIndicesBuffer);
+		
+		gl.uniformMatrix4fv(prg.uMVMatrix, false, mvMatrix);
+		gl.uniformMatrix4fv(prg.uPMatrix, false, pMatrix);
+		drawCube();
+		
+		
+		// Floor    <============
+		gl.enableVertexAttribArray(prg.aVertexPosition);
+		gl.enableVertexAttribArray(prg.aVertexNormal);
+
+		
+		gl.bindBuffer(gl.ARRAY_BUFFER, sphereVerticesBuffer);
+		gl.vertexAttribPointer(prg.aVertexPosition, 3, gl.FLOAT, false, 0, 0);
+
+		
+		mat4.translate(mvMatrix, [0,-5, 0], mvMatrix);
+		mat4.scale(mvMatrix, [1.5,0.1,1.5], mvMatrix);
+		
+
+	    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,sphereIndicesBuffer);
+		
+		gl.uniformMatrix4fv(prg.uMVMatrix, false, mvMatrix);
+		gl.uniformMatrix4fv(prg.uPMatrix, false, pMatrix);
+		drawCube();
+		
+		// 1s leg    <============
+		gl.enableVertexAttribArray(prg.aVertexPosition);
+		gl.enableVertexAttribArray(prg.aVertexNormal);
+
+		
+		gl.bindBuffer(gl.ARRAY_BUFFER, sphereVerticesBuffer);
+		gl.vertexAttribPointer(prg.aVertexPosition, 3, gl.FLOAT, false, 0, 0);
+
+		
+		mat4.translate(mvMatrix, [0.567,20, 0.567], mvMatrix);
+		mat4.scale(mvMatrix, [0.1,25,0.1], mvMatrix);
+		
+
+	    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,sphereIndicesBuffer);
+		
+		gl.uniformMatrix4fv(prg.uMVMatrix, false, mvMatrix);
+		gl.uniformMatrix4fv(prg.uPMatrix, false, pMatrix);
+		drawCube();
+		
+		// 2nd leg    <============
+		gl.enableVertexAttribArray(prg.aVertexPosition);
+		gl.enableVertexAttribArray(prg.aVertexNormal);
+
+		
+		gl.bindBuffer(gl.ARRAY_BUFFER, sphereVerticesBuffer);
+		gl.vertexAttribPointer(prg.aVertexPosition, 3, gl.FLOAT, false, 0, 0);
+
+		
+		mat4.translate(mvMatrix, [-11.35,0, 0], mvMatrix);
+		
+
+	    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,sphereIndicesBuffer);
+		
+		gl.uniformMatrix4fv(prg.uMVMatrix, false, mvMatrix);
+		gl.uniformMatrix4fv(prg.uPMatrix, false, pMatrix);
+		drawCube();
+		
+		// 3rd leg    <============
+		gl.enableVertexAttribArray(prg.aVertexPosition);
+		gl.enableVertexAttribArray(prg.aVertexNormal);
+
+		
+		gl.bindBuffer(gl.ARRAY_BUFFER, sphereVerticesBuffer);
+		gl.vertexAttribPointer(prg.aVertexPosition, 3, gl.FLOAT, false, 0, 0);
+
+		
+		mat4.translate(mvMatrix, [0,0, -11.35], mvMatrix);
+		
+
+	    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,sphereIndicesBuffer);
+		
+		gl.uniformMatrix4fv(prg.uMVMatrix, false, mvMatrix);
+		gl.uniformMatrix4fv(prg.uPMatrix, false, pMatrix);
+		drawCube();
+		
+		// 4th leg    <============
+		gl.enableVertexAttribArray(prg.aVertexPosition);
+		gl.enableVertexAttribArray(prg.aVertexNormal);
+
+		
+		gl.bindBuffer(gl.ARRAY_BUFFER, sphereVerticesBuffer);
+		gl.vertexAttribPointer(prg.aVertexPosition, 3, gl.FLOAT, false, 0, 0);
+
+		
+		mat4.translate(mvMatrix, [11.35,0, 0], mvMatrix);
+		
+
+	    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,sphereIndicesBuffer);
+		
+		gl.uniformMatrix4fv(prg.uMVMatrix, false, mvMatrix);
+		gl.uniformMatrix4fv(prg.uPMatrix, false, pMatrix);
+		drawCube();
+		
+		// Cube     <============
+		gl.enableVertexAttribArray(prg.aVertexPosition);
+		gl.enableVertexAttribArray(prg.aVertexNormal);
+
+		
+		gl.bindBuffer(gl.ARRAY_BUFFER, sphereVerticesBuffer);
+		gl.vertexAttribPointer(prg.aVertexPosition, 3, gl.FLOAT, false, 0, 0);
+
+		
+		mat4.translate(mvMatrix, [-5.675,1.9, 5.675], mvMatrix);
+		mat4.scale(mvMatrix, [1,0.5,1], mvMatrix);
+		
+
+	    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,sphereIndicesBuffer);
+		
+		gl.uniformMatrix4fv(prg.uMVMatrix, false, mvMatrix);
+		gl.uniformMatrix4fv(prg.uPMatrix, false, pMatrix);
+		drawCube();
+		
+}
+
+
+
+
+var lastTime = 0;
+
+/**
+* Updates the angle of rotation by a little bit each time
+*/
+function animate() {
+    var timeNow = new Date().getTime();
+    if (lastTime != 0) {
+        var elapsed = timeNow - lastTime;
+        angle += (90 * elapsed) / 10000.0;
+    }
+    lastTime = timeNow;
+}
+
+/**
+* Render Loop
+*/
+function renderLoop() {
+    requestAnimFrame(renderLoop);
+    drawScene();
+    animate();
+}
+
+/**
+* Entry point. This function is invoked when the page is loaded
+*/
+function runWebGLApp() {
+	//Obtains a WebGL context
+	gl = utils.getGLContext("canvas-element-id");
+	//Initializes the program (shaders)
+    initProgram();
+    //Initializes the buffers that we are going to use
+    initBuffers();	
+    //Initializes lights
+ 	initLights();
+    //Renders the scene!
+    renderLoop();
+}
+</script>
+</head>
+
+<body onLoad='runWebGLApp()'>
+<div id='top'>
+	<h2>Rotating Table Assignment</h2>
+	<p> 
+	Our 3rd assignment to create lighting effects on models, more specifically a table; TADAH!!!!! :)
+	</p>
+</div>
+
+<div id='contents'>
+	<div id='canvasContainer'>
+		<canvas id='canvas-element-id' width='480' height='400'>
+			Your browser does not support the HTML5 canvas element.
+		</canvas>
+	</div>
+</div>
+
+<div id='bottom'>
+
+<table style='padding=0px'>
+		<tr>
+			<td align='right'>Light Color (Light Diffuse Term):</td><td colspan='2'><div id='colorSelectorLight' class='colorSelector'><div style='background-color:rgb(256,256,256)'></div></div></td>
+			<td>Sphere Color (Material Diffuse Term):</td><td colspan='2'><div id='colorSelectorSphere' class='colorSelector'><div style='background-color:rgb(46,99,191)'></div></div></td>
+		</tr>
+		<tr>
+			<td align='right'>Light Ambient Term:</td><td id='slider-la-value'  width='30px'>0.03</td><td><div id='slider-la'/></td>
+			<td>Material Ambient Term:</td><td id='slider-ma-value' width='30px'>1.0</td><td colspan='3'><div id='slider-ma'/></td>
+		</tr>
+
+		<tr>
+			<td align='right'>Light Specular Term:</td><td id='slider-ls-value'  width='30px'>1.0</td><td><div id='slider-ls'/></td>
+			<td>Material Specular Term:</td><td id='slider-ms-value' width='30px'>1.0</td><td colspan='3'><div id='slider-ms'/></td>
+		</tr>
+		<tr>
+
+			<td align='right'>X:</td><td id='slider-x-value' width='30px' align='center'>-0.25</td><td width='150px'><div id='slider-x'/></td>
+
+			<td>Shininess:</td><td id='slider-s-value' width='30px'>10.0</td><td width='150px'><div id='slider-s'/></td>
+		</tr>
+		<tr>
+			<td align='right'>Y:</td><td id='slider-y-value'  width='30px' align='center'>-0.25</td><td width='150px'><div id='slider-y'/></td>
+			<td>Background Color (gl.clearColor):</td><td colspan='2'><div id='colorSelectorBg' class='colorSelector'><div style='background-color:rgb(77,77,77)'></div></div></td>
+		</tr>
+		<tr>
+			<td align='right'>Z:</td> <td id='slider-z-value'  width='30px' align='center'>-0.25</td><td width='150px'><div id='slider-z'/></td>
+
+		</tr>
+	</table>
+
+	<br/>
+
+	<p>This model has three terms:</p>
+	<ul>
+	<li><b>Ia</b>: ambient term</li>
+	<li><b>Id</b>: diffuse term</li>
+	<li><b>Is</b>: specular term</li>
+	</ul>
+	<p>However, the diffusive and specular terms are only taken into account if the Lambert term is larger than zero.</p>
+	<p>In this case: I = <b>Ia</b> + <b>Id</b> + <b>Is</b>,  otherwise (Lambert term <= 0):I = <b>Ia</b></p>
+</div>
+<script>cview.run(cview.MODE_VIEW);</script>
+<script>
+
+function updateShininess(){
+    var v = $('#slider-s').slider("value");
+
+    gl.uniform1f(prg.uShininess, v);
+    $('#slider-s-value').html(v);
+}
+
+$('#slider-s').slider({value:10.0, min:0, max:40, step:1, slide: updateShininess});
+
+function updateLightAmbientTerm(){
+	var la = $('#slider-la').slider("value");
+	gl.uniform4fv(prg.uLightAmbient,[0.0,la,0.0,1.0]);
+	$('#slider-la-value').html(la);
+}
+
+function updateLightDiffuseTerm(){
+	var ld = $('#slider-ld').slider("value");
+	gl.uniform4fv(prg.uLightDiffuse,[ld,ld,ld,1.0]);
+	$('#slider-ld-value').html(ld);
+}
+
+function updateLightSpecularTerm(){
+	var ls = $('#slider-ls').slider("value");
+	gl.uniform4fv(prg.uLightSpecular,[ls,ls,ls,1.0]);
+	$('#slider-ls-value').html(ls);
+}
+
+
+function updateMaterialAmbientTerm(){
+	var ma = $('#slider-ma').slider("value");
+	gl.uniform4fv(prg.uMaterialAmbient,[ma,ma,ma,1.0]);
+	$('#slider-ma-value').html(ma);
+}
+
+function updateMaterialSpecularTerm(){
+	var ms = $('#slider-ms').slider("value");
+	gl.uniform4fv(prg.uMaterialSpecular,[ms,ms,ms,1.0]);
+	$('#slider-ms-value').html(ms);
+}
+
+$('#slider-la').slider({value:0.03, min:-0.01, max:1.0, step:0.01, slide:updateLightAmbientTerm});
+$('#slider-ld').slider({value:0.35, min:-0.01, max:1.0, step:0.01, slide:updateLightDiffuseTerm});
+$('#slider-ls').slider({value:1.0, min:-0.01, max:1.0, step:0.01, slide:updateLightSpecularTerm});
+
+$('#slider-ma').slider({value:1.0, min:-0.2, max:1.2, step:0.1, slide:updateMaterialAmbientTerm});
+$('#slider-ms').slider({value:1.0, min:-0.01, max:1.2, step:0.1, slide:updateMaterialSpecularTerm});
+
+function updateLightDirection(){
+   var x = $('#slider-x').slider("value");
+   var y = $('#slider-y').slider("value");
+   var z = $('#slider-z').slider("value");
+   gl.uniform3fv(prg.uLightDirection, [x,y,z]);
+   $('#slider-x-value').html(x);
+   $('#slider-y-value').html(y);
+   $('#slider-z-value').html(z);
+}
+
+$('#slider-x').slider({value:-0.25, min:-1.05, max:1.05, step:0.01, slide:updateLightDirection});
+$('#slider-y').slider({value:-0.25, min:-1.05, max:1.05, step:0.01, slide:updateLightDirection});
+$('#slider-z').slider({value:-0.25, min:-1.05, max:1.05, step:0.01, slide:updateLightDirection});
+
+function updateObjectColor(r,g,b){
+    gl.uniform4fv(prg.uMaterialDiffuse,[r,g,b,1.0]);
+}
+
+function updateLightColor(r,g,b){
+    gl.uniform4fv(prg.uLightDiffuse,[r,g,b,1.0]);
+}
+
+function updateClearColor(r,g,b){
+    clearColor = [r,g,b,1.0];
+}
+
+
+$('#colorSelectorSphere').ColorPicker({
+    onSubmit: function(hsb, hex, rgb, el) {
+			$(el).val(hex);
+			$(el).ColorPickerHide();
+
+	},
+	color: '#00ff00',
+    onShow: function (colpkr) {
+        $(colpkr).fadeIn(500);
+        return false;
+    },
+    onHide: function (colpkr) {
+        $(colpkr).fadeOut(500);
+        return false;
+    },
+    onChange: function (hsb, hex, rgb) {
+        $('#colorSelectorSphere div').css('backgroundColor', '#' + hex);
+        updateObjectColor(rgb.r/256,rgb.g/256,rgb.b/256);
+    },
+
+    onBeforeShow: function (colpkr) {
+			$(colpkr).ColorPickerSetColor('rgb(0.5,0.8,0.1)');
+		}
+	})
+
+
+$('#colorSelectorLight').ColorPicker({
+    onSubmit: function(hsb, hex, rgb, el) {
+			$(el).val(hex);
+			$(el).ColorPickerHide();
+
+	},
+	color: '#00ff00',
+    onShow: function (colpkr) {
+        $(colpkr).fadeIn(500);
+        return false;
+    },
+    onHide: function (colpkr) {
+        $(colpkr).fadeOut(500);
+        return false;
+    },
+    onChange: function (hsb, hex, rgb) {
+        $('#colorSelectorLight div').css('backgroundColor', '#' + hex);
+        updateLightColor(rgb.r/256,rgb.g/256,rgb.b/256);
+    },
+
+    onBeforeShow: function (colpkr) {
+			$(colpkr).ColorPickerSetColor('rgb(0.5,0.8,0.1)');
+		}
+	})
+
+$('#colorSelectorBg').ColorPicker({
+    onSubmit: function(hsb, hex, rgb, el) {
+			$(el).val(hex);
+			$(el).ColorPickerHide();
+
+	},
+	color: '#00ff00',
+    onShow: function (colpkr) {
+        $(colpkr).fadeIn(500);
+        return false;
+    },
+    onHide: function (colpkr) {
+        $(colpkr).fadeOut(500);
+        return false;
+    },
+    onChange: function (hsb, hex, rgb) {
+        $('#colorSelectorBg div').css('backgroundColor', '#' + hex);
+        updateClearColor(rgb.r/256,rgb.g/256,rgb.b/256);
+    },
+
+    onBeforeShow: function (colpkr) {
+			$(this).ColorPickerSetColor('rgb(0.5,0.8,0.1)');
+		}
+	})
+
+</script>
+</body>
+</html>
